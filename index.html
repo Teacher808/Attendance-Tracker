@@ -39,153 +39,177 @@
     import { 
       School, Users, CalendarDays, BarChart4, LogOut, 
       CheckCircle2, XCircle, ChevronLeft, Save, AlertCircle, 
-      FileSpreadsheet, Plus, UserPlus, ListPlus, Check, Copy, Percent, Menu
+      FileSpreadsheet, Plus, ListPlus, Check, Copy, Percent, 
+      Cloud, CloudOff, RefreshCw, Loader2, Mail, Lock, LogIn, UserPlus
     } from 'https://esm.sh/lucide-react@0.292.0';
 
-    // --- MOCK INITIAL DATA ---
-    const INITIAL_USERS = [
-      { id: 'u1', username: 'teacher', password: 'password', name: 'Mr. Dela Cruz' }
-    ];
+    // --- FIREBASE IMPORTS ---
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { 
+      getAuth, signInWithCustomToken, onAuthStateChanged, 
+      signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut 
+    } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    import { 
+      getFirestore, collection, doc, setDoc, getDoc, updateDoc, 
+      onSnapshot, enableIndexedDbPersistence 
+    } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
-    const INITIAL_CLASSES = [
-      {
-        id: 'c1',
-        teacherId: 'u1',
-        name: 'Grade 10 - Rizal',
-        subject: 'Mathematics',
-        schoolYear: '2025-2026',
-        students: [
-          { id: 's1', name: 'Alcantara, Joshua', gender: 'Male' },
-          { id: 's2', name: 'Bautista, Mark', gender: 'Male' },
-          { id: 's3', name: 'Dela Torre, Anna', gender: 'Female' },
-          { id: 's4', name: 'Espiritu, Maria', gender: 'Female' },
-        ],
-        attendance: {
-          '2026-03-02': { s1: 'Present', s2: 'Absent', s3: 'Present', s4: 'Present' },
-          '2026-03-03': { s1: 'Present', s2: 'Present', s3: 'Present', s4: 'Absent' },
-          '2026-03-04': { s1: 'Present', s2: 'Present', s3: 'Present', s4: 'Present' },
-          '2026-03-05': { s1: 'Absent', s2: 'Present', s3: 'Present', s4: 'Present' },
+    // --- FIREBASE INITIALIZATION ---
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+    // Enable offline persistence (caches data so you can read/write while offline)
+    try {
+      enableIndexedDbPersistence(db).catch((err) => {
+        if (err.code === 'failed-precondition') {
+          console.warn('Multiple tabs open, offline persistence can only be enabled in one tab at a time.');
+        } else if (err.code === 'unimplemented') {
+          console.warn('The current browser does not support all of the features required to enable offline persistence.');
         }
-      }
-    ];
+      });
+    } catch (e) {
+      console.error("Persistence init error", e);
+    }
 
+    // --- MAIN APP COMPONENT ---
     function App() {
-      // Global App State
-      const [users, setUsers] = useState(INITIAL_USERS);
-      const [currentUser, setCurrentUser] = useState(null);
-      const [classes, setClasses] = useState(INITIAL_CLASSES);
+      // Auth & Profile State
+      const [user, setUser] = useState(null);
+      const [loadingAuth, setLoadingAuth] = useState(true);
+      const [profileState, setProfileState] = useState('loading'); // 'loading', 'needs_name', 'ready'
+      const [teacherName, setTeacherName] = useState('');
       
-      // Navigation & View State
-      const [authMode, setAuthMode] = useState('login');
+      // Data State
+      const [classes, setClasses] = useState([]);
+      
+      // Navigation State
       const [view, setView] = useState('dashboard');
       const [activeClassId, setActiveClassId] = useState(null);
       const [activeTab, setActiveTab] = useState('record');
 
-      // --- AUTHENTICATION LOGIC ---
-      const handleLogin = (e) => {
-        e.preventDefault();
-        const username = e.target.username.value;
-        const password = e.target.password.value;
-        
-        const foundUser = users.find(u => u.username === username && u.password === password);
-        if (foundUser) {
-          setCurrentUser(foundUser);
-          setView('dashboard');
-        } else {
-          alert("Invalid username or password. Please try again.");
-        }
-      };
+      // Network State
+      const [isOnline, setIsOnline] = useState(navigator.onLine);
+      const [isSyncing, setIsSyncing] = useState(false);
 
-      const handleSignup = (e) => {
-        e.preventDefault();
-        const name = e.target.name.value;
-        const username = e.target.username.value;
-        const password = e.target.password.value;
-
-        if (users.find(u => u.username === username)) {
-          alert("This username is already taken. Choose another one.");
-          return;
-        }
-
-        const newUser = {
-          id: 'u' + Date.now(),
-          name,
-          username,
-          password
+      // Network Event Listeners
+      useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => { 
+          window.removeEventListener('online', handleOnline); 
+          window.removeEventListener('offline', handleOffline); 
         };
+      }, []);
 
-        setUsers([...users, newUser]);
-        setCurrentUser(newUser); 
-        setView('dashboard');
+      // 1. Authentication Check
+      useEffect(() => {
+        const initAuth = async () => {
+          try {
+            // Priority to platform injected token if it exists (for seamless preview)
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await signInWithCustomToken(auth, __initial_auth_token);
+            }
+          } catch (error) {
+            console.error("Auth init error:", error);
+          }
+        };
+        initAuth();
+
+        const unsubscribe = onAuthStateChanged(auth, (u) => {
+          setUser(u);
+          setLoadingAuth(false);
+          if (!u) {
+            // Reset state on logout
+            setClasses([]);
+            setProfileState('loading');
+            setTeacherName('');
+            setView('dashboard');
+          }
+        });
+        return () => unsubscribe();
+      }, []);
+
+      // 2. Fetch Profile and Classes from Firestore
+      useEffect(() => {
+        if (!user) return;
+
+        // Fetch user profile (display name)
+        const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
+        getDoc(profileRef).then(d => {
+          if (d.exists() && d.data().name) {
+            setTeacherName(d.data().name);
+            setProfileState('ready');
+          } else {
+            setProfileState('needs_name');
+          }
+        }).catch(() => setProfileState('needs_name'));
+
+        // Real-time listener for classes
+        const classesRef = collection(db, 'artifacts', appId, 'users', user.uid, 'classes');
+        const unsubscribe = onSnapshot(classesRef, { includeMetadataChanges: true }, (snapshot) => {
+          const fetchedClasses = [];
+          snapshot.forEach(document => {
+            fetchedClasses.push({ id: document.id, ...document.data() });
+          });
+          // Sort classes alphabetically by name
+          fetchedClasses.sort((a,b) => a.name.localeCompare(b.name));
+          setClasses(fetchedClasses);
+          
+          // Update sync status indicator
+          setIsSyncing(snapshot.metadata.hasPendingWrites);
+        }, (error) => {
+          console.error("Firestore error:", error);
+        });
+
+        return () => unsubscribe();
+      }, [user]);
+
+      // --- HANDLERS ---
+      const handleSaveProfileName = async (name) => {
+        if (!user || !name.trim()) return;
+        setTeacherName(name.trim());
+        setProfileState('ready');
+        try {
+          const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'info');
+          await setDoc(profileRef, { name: name.trim() });
+        } catch(e) {
+          console.error("Error saving profile", e);
+        }
       };
 
-      const handleLogout = () => {
-        setCurrentUser(null);
-        setActiveClassId(null);
-        setView('dashboard');
+      const handleLogout = async () => {
+        try {
+          await signOut(auth);
+        } catch (error) {
+          console.error("Error signing out:", error);
+        }
       };
 
-      // --- RENDERING VIEWS ---
-      if (!currentUser) {
+      // --- RENDER SCREENS ---
+      if (loadingAuth || (user && profileState === 'loading')) {
         return (
-          <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4 sm:p-8">
-            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-md w-full transition-all">
-              <div className="flex flex-col items-center mb-8">
-                <div className="bg-blue-600 p-4 rounded-full mb-4 shadow-lg shadow-blue-200">
-                  <School className="w-8 h-8 text-white" />
-                </div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 text-center">Students Attendance Tracker</h1>
-                <p className="text-slate-500 text-sm mt-2 text-center">Modern Teacher Attendance System</p>
-              </div>
-
-              {authMode === 'login' ? (
-                <form onSubmit={handleLogin} className="space-y-5">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Username</label>
-                    <input name="username" type="text" required className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" placeholder="e.g. teacher" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Password</label>
-                    <input name="password" type="password" required className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" placeholder="••••••••" />
-                  </div>
-                  <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-md shadow-blue-200">
-                    Log In
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleSignup} className="space-y-5">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Full Name</label>
-                    <input name="name" type="text" required className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" placeholder="e.g. Mrs. Santos" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Choose a Username</label>
-                    <input name="username" type="text" required className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Create Password</label>
-                    <input name="password" type="password" required className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" />
-                  </div>
-                  <button type="submit" className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl hover:bg-green-700 active:bg-green-800 transition-colors shadow-md shadow-green-200">
-                    Create Account
-                  </button>
-                </form>
-              )}
-
-              <div className="mt-8 text-center">
-                <button 
-                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-                  className="text-blue-600 hover:text-blue-800 font-semibold text-sm transition-colors py-2 px-4 rounded-lg hover:bg-blue-50"
-                >
-                  {authMode === 'login' ? "New teacher? Create an account here" : "Already registered? Log in here"}
-                </button>
-              </div>
-            </div>
+          <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center">
+            <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
+            <p className="text-slate-500 font-medium">Connecting to the Cloud...</p>
           </div>
         );
       }
 
-      const teacherClasses = classes.filter(c => c.teacherId === currentUser.id);
+      // Authentication Screen (Login / Register)
+      if (!user) {
+        return <AuthScreen auth={auth} />;
+      }
+
+      // Welcome Screen (First time login)
+      if (profileState === 'needs_name') {
+        return <WelcomeScreen onSave={handleSaveProfileName} />;
+      }
+
       const activeClass = classes.find(c => c.id === activeClassId);
 
       return (
@@ -195,20 +219,36 @@
             <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-3 sm:py-4 flex justify-between items-center gap-4">
               <div className="flex items-center gap-3">
                 <School className="w-6 h-6 sm:w-7 sm:h-7 shrink-0" />
-                <h1 className="text-lg sm:text-xl font-bold truncate hidden sm:block">EduTrack Attendance</h1>
+                <h1 className="text-lg sm:text-xl font-bold truncate hidden sm:block">Attendance Tracker Secure Cloud</h1>
                 <h1 className="text-lg font-bold truncate sm:hidden">EduTrack</h1>
               </div>
+              
               <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-                <span className="font-medium text-xs sm:text-sm bg-blue-900/60 px-3 py-1.5 rounded-full truncate max-w-[120px] sm:max-w-[200px]">
-                  {currentUser.name}
-                </span>
-                <button 
-                  onClick={handleLogout} 
-                  className="hover:bg-blue-700 p-2 rounded-full transition-colors flex items-center justify-center bg-blue-900/30" 
-                  title="Log Out"
-                >
-                  <LogOut className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
+                {/* Network Status Indicator */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-white/10 border-white/20 hidden sm:flex">
+                  {!isOnline ? (
+                    <><CloudOff className="w-4 h-4 text-amber-300" /> <span className="text-xs font-semibold text-amber-100">Offline</span></>
+                  ) : isSyncing ? (
+                    <><RefreshCw className="w-4 h-4 text-blue-300 animate-spin" /> <span className="text-xs font-semibold text-blue-100">Syncing...</span></>
+                  ) : (
+                    <><Cloud className="w-4 h-4 text-emerald-300" /> <span className="text-xs font-semibold text-emerald-100">Synced</span></>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 sm:gap-3 bg-blue-900/40 px-3 py-1.5 rounded-full border border-blue-700/50">
+                  <span className="font-medium text-xs sm:text-sm truncate max-w-[100px] sm:max-w-[150px]">
+                    {teacherName}
+                  </span>
+                  <div className="w-px h-4 bg-blue-700 mx-1 hidden sm:block"></div>
+                  <button 
+                    onClick={handleLogout}
+                    className="flex items-center gap-1.5 text-blue-200 hover:text-white transition-colors"
+                    title="Logout"
+                  >
+                    <LogOut className="w-4 h-4 sm:w-4 sm:h-4" />
+                    <span className="text-xs font-semibold hidden sm:inline">Logout</span>
+                  </button>
+                </div>
               </div>
             </div>
           </header>
@@ -232,7 +272,7 @@
                   </button>
                 </div>
 
-                {teacherClasses.length === 0 ? (
+                {classes.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-8 sm:p-16 text-center shadow-sm">
                     <div className="bg-slate-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
                       <School className="w-12 h-12 text-slate-400" />
@@ -242,16 +282,17 @@
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-                    {teacherClasses.map(cls => (
+                    {classes.map(cls => (
                       <div 
                         key={cls.id} 
-                        className="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group flex flex-col h-full"
+                        className="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-slate-200 hover:shadow-md hover:border-blue-300 transition-all cursor-pointer group flex flex-col h-full relative overflow-hidden"
                         onClick={() => {
                           setActiveClassId(cls.id);
                           setActiveTab('record');
                           setView('class-detail');
                         }}
                       >
+                        <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 rounded-l-2xl"></div>
                         <div className="flex justify-between items-start mb-4 gap-2">
                           <div className="flex-1 min-w-0">
                             <h3 className="text-lg font-bold text-slate-800 group-hover:text-blue-600 transition-colors truncate">{cls.name}</h3>
@@ -276,9 +317,8 @@
             {/* CREATE CLASS VIEW */}
             {view === 'create-class' && (
               <CreateClassView 
-                currentUser={currentUser} 
+                user={user} 
                 classes={classes}
-                setClasses={setClasses} 
                 onGoBack={() => setView('dashboard')} 
               />
             )}
@@ -288,8 +328,9 @@
               <div className="animate-in fade-in space-y-4 sm:space-y-6">
                 
                 {/* Responsive Header Card */}
-                <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center">
-                  <div className="flex items-center gap-3 sm:gap-4 w-full lg:w-auto">
+                <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500 rounded-l-2xl hidden lg:block"></div>
+                  <div className="flex items-center gap-3 sm:gap-4 w-full lg:w-auto z-10">
                     <button 
                       onClick={() => setView('dashboard')} 
                       className="p-2 sm:p-2.5 hover:bg-slate-100 rounded-full text-slate-500 hover:text-slate-800 transition-colors shrink-0 bg-slate-50 border border-slate-200"
@@ -307,7 +348,7 @@
                   </div>
                   
                   {/* Tab Navigation */}
-                  <div className="flex bg-slate-100 p-1.5 rounded-xl w-full lg:w-auto overflow-x-auto custom-scrollbar">
+                  <div className="flex bg-slate-100 p-1.5 rounded-xl w-full lg:w-auto overflow-x-auto custom-scrollbar z-10">
                     <button 
                       onClick={() => setActiveTab('record')}
                       className={`flex-1 lg:flex-none min-w-[140px] flex justify-center items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-sm transition-all whitespace-nowrap ${activeTab === 'record' ? 'bg-white text-blue-700 shadow-sm border border-slate-200/50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'}`}
@@ -325,7 +366,7 @@
 
                 {/* Tab Contents */}
                 <div className="w-full">
-                  {activeTab === 'record' && <AttendanceRecordTab activeClass={activeClass} setClasses={setClasses} />}
+                  {activeTab === 'record' && <AttendanceRecordTab activeClass={activeClass} user={user} />}
                   {activeTab === 'report' && <MonthlyReportTab activeClass={activeClass} />}
                 </div>
               </div>
@@ -338,11 +379,173 @@
 
     // --- SUB-COMPONENTS ---
 
-    function CreateClassView({ currentUser, classes, setClasses, onGoBack }) {
+    // New Authentication Screen
+    function AuthScreen({ auth }) {
+      const [isLogin, setIsLogin] = useState(true);
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setIsLoading(true);
+
+        try {
+          if (isLogin) {
+            await signInWithEmailAndPassword(auth, email, password);
+          } else {
+            await createUserWithEmailAndPassword(auth, email, password);
+          }
+        } catch (err) {
+          // Format Firebase error messages nicely
+          let niceError = err.message;
+          if (err.code === 'auth/invalid-email') niceError = "Invalid email address format.";
+          if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') niceError = "Incorrect email or password.";
+          if (err.code === 'auth/email-already-in-use') niceError = "An account with this email already exists.";
+          if (err.code === 'auth/weak-password') niceError = "Password should be at least 6 characters.";
+          
+          setError(niceError);
+          setIsLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full animate-in fade-in slide-in-from-bottom-4">
+            
+            <div className="text-center mb-8">
+              <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3">
+                <School className="w-8 h-8 text-blue-600 -rotate-3" />
+              </div>
+              <h2 className="text-2xl font-bold text-slate-800">EduTrack</h2>
+              <p className="text-slate-500 text-sm mt-1">
+                {isLogin ? 'Sign in to sync your attendance data' : 'Create an account to get started'}
+              </p>
+            </div>
+
+            {error && (
+              <div className="mb-6 p-3 bg-red-50 text-red-700 rounded-xl flex items-start gap-2 text-sm border border-red-200">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <p>{error}</p>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Email Address</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Mail className="h-5 w-5 text-slate-400" />
+                  </div>
+                  <input 
+                    type="email" 
+                    required
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    className="w-full pl-10 p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow"
+                    placeholder="teacher@school.edu"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Password</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Lock className="h-5 w-5 text-slate-400" />
+                  </div>
+                  <input 
+                    type="password" 
+                    required
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    className="w-full pl-10 p-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow"
+                    placeholder="••••••••"
+                  />
+                </div>
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={isLoading}
+                className="w-full bg-blue-600 text-white p-3.5 rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-md flex justify-center items-center gap-2 disabled:bg-blue-400"
+              >
+                {isLoading ? (
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                ) : isLogin ? (
+                  <><LogIn className="w-5 h-5" /> Sign In</>
+                ) : (
+                  <><UserPlus className="w-5 h-5" /> Create Account</>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+              <p className="text-slate-600 text-sm">
+                {isLogin ? "Don't have an account?" : "Already have an account?"}
+                <button 
+                  onClick={() => { setIsLogin(!isLogin); setError(''); }}
+                  className="ml-2 text-blue-600 font-bold hover:underline"
+                >
+                  {isLogin ? 'Sign up' : 'Log in'}
+                </button>
+              </p>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    function WelcomeScreen({ onSave }) {
+      const [name, setName] = useState('');
+      
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(name);
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center animate-in fade-in">
+            <div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
+              <School className="w-10 h-10 text-blue-600" />
+            </div>
+            <h2 className="text-2xl font-bold mb-2 text-slate-800">Students Attendance Tracker</h2>
+            <p className="text-slate-500 mb-8 text-sm">Let's complete your profile setup before we begin tracking attendance.</p>
+            
+            <form onSubmit={handleSubmit}>
+              <div className="mb-6 text-left">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">How should we address you?</label>
+                <input 
+                  type="text" 
+                  required
+                  value={name} 
+                  onChange={e => setName(e.target.value)} 
+                  placeholder="e.g. Mr. Dela Cruz" 
+                  className="w-full p-3.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50 transition-shadow" 
+                />
+              </div>
+              <button 
+                type="submit" 
+                className="w-full bg-blue-600 text-white p-3.5 rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-md flex justify-center items-center gap-2"
+              >
+                Start Teaching
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    function CreateClassView({ user, classes, onGoBack }) {
       const [className, setClassName] = useState('');
       const [subject, setSubject] = useState('');
       const [schoolYear, setSchoolYear] = useState('2025-2026');
       const [addMode, setAddMode] = useState('single'); 
+      const [errorMsg, setErrorMsg] = useState('');
       
       const [roster, setRoster] = useState([]);
       const [singleName, setSingleName] = useState('');
@@ -392,24 +595,31 @@
         setImportClassId('');
       };
 
-      const handleSaveClass = () => {
+      const handleSaveClass = async () => {
         if (!className.trim() || !subject.trim()) {
-          alert("Please enter a class name and subject.");
+          setErrorMsg("Please enter both a class name and subject.");
           return;
         }
 
+        const newClassId = 'c' + Date.now();
         const newClass = {
-          id: 'c' + Date.now(),
-          teacherId: currentUser.id,
-          name: className,
-          subject: subject,
-          schoolYear: schoolYear,
+          id: newClassId,
+          name: className.trim(),
+          subject: subject.trim(),
+          schoolYear: schoolYear.trim(),
           students: roster.sort((a,b) => a.name.localeCompare(b.name)),
-          attendance: {}
+          attendance: {},
+          createdAt: new Date().toISOString()
         };
 
-        setClasses(prev => [...prev, newClass]);
-        onGoBack();
+        try {
+          // Immediately writes to offline cache and queues sync
+          const classRef = doc(db, 'artifacts', appId, 'users', user.uid, 'classes', newClassId);
+          await setDoc(classRef, newClass);
+          onGoBack(); // Return to dashboard instantly, data syncs in background
+        } catch(e) {
+          setErrorMsg("Failed to save class. " + e.message);
+        }
       };
 
       return (
@@ -420,6 +630,13 @@
             </button>
             <h2 className="text-xl sm:text-2xl font-bold text-slate-800">Create New Class</h2>
           </div>
+
+          {errorMsg && (
+            <div className="bg-red-50 text-red-700 p-4 rounded-xl flex items-center gap-3 border border-red-200">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <p className="font-medium text-sm">{errorMsg}</p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             
@@ -555,7 +772,7 @@
 
               <div className="p-4 sm:p-5 border-t border-slate-200 bg-white shrink-0">
                 <button onClick={handleSaveClass} className="w-full bg-green-600 hover:bg-green-700 active:bg-green-800 text-white font-bold py-3.5 rounded-xl flex justify-center items-center gap-2 transition-colors shadow-sm">
-                  <Save className="w-5 h-5" /> Save New Class
+                  <Save className="w-5 h-5" /> Save Class to Cloud
                 </button>
               </div>
             </div>
@@ -565,16 +782,16 @@
       );
     }
 
-    function AttendanceRecordTab({ activeClass, setClasses }) {
+    function AttendanceRecordTab({ activeClass, user }) {
       const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
       const [tempAttendance, setTempAttendance] = useState({});
       const [isSaved, setIsSaved] = useState(true);
 
       useMemo(() => {
-        const existing = activeClass.attendance[selectedDate] || {};
+        const existing = activeClass.attendance?.[selectedDate] || {};
         const initialTemp = {};
         activeClass.students.forEach(s => {
-          initialTemp[s.id] = existing[s.id] || 'Present';
+          initialTemp[s.id] = existing[s.id] || 'Present'; // Default to present
         });
         setTempAttendance(initialTemp);
         setIsSaved(true);
@@ -585,20 +802,19 @@
         setIsSaved(false);
       };
 
-      const saveAttendance = () => {
-        setClasses(prevClasses => prevClasses.map(cls => {
-          if (cls.id === activeClass.id) {
-            return {
-              ...cls,
-              attendance: {
-                ...cls.attendance,
-                [selectedDate]: tempAttendance
-              }
-            };
-          }
-          return cls;
-        }));
-        setIsSaved(true);
+      const saveAttendance = async () => {
+        if (!user) return;
+        
+        try {
+          const classRef = doc(db, 'artifacts', appId, 'users', user.uid, 'classes', activeClass.id);
+          // Use dot notation to securely update just this specific date without touching others
+          await updateDoc(classRef, {
+            [`attendance.${selectedDate}`]: tempAttendance
+          });
+          setIsSaved(true);
+        } catch(error) {
+          console.error("Error saving attendance to cloud", error);
+        }
       };
 
       return (
@@ -619,7 +835,7 @@
               disabled={isSaved}
               className={`w-full sm:w-auto flex justify-center items-center gap-2 px-6 py-3 sm:py-2.5 rounded-xl font-bold transition-all ${isSaved ? 'bg-slate-100 text-slate-500 border border-slate-200 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 shadow-md shadow-green-200'}`}
             >
-              {isSaved ? <><Check className="w-5 h-5" /> Saved for Date</> : <><Save className="w-5 h-5" /> Save Changes</>}
+              {isSaved ? <><Check className="w-5 h-5" /> Saved for Date</> : <><Save className="w-5 h-5" /> Sync to Cloud</>}
             </button>
           </div>
 
@@ -664,7 +880,8 @@
     }
 
     function MonthlyReportTab({ activeClass }) {
-      const allRecordedDates = Object.keys(activeClass.attendance).sort();
+      const attendanceRecord = activeClass.attendance || {};
+      const allRecordedDates = Object.keys(attendanceRecord).sort();
       const availableMonths = [...new Set(allRecordedDates.map(date => date.substring(0, 7)))];
       
       const [selectedMonth, setSelectedMonth] = useState(
@@ -686,7 +903,7 @@
         let absentTotal = 0;
 
         const cells = datesInSelectedMonth.map(date => {
-          const status = activeClass.attendance[date]?.[student.id];
+          const status = attendanceRecord[date]?.[student.id];
           if (status === 'Present') presentTotal++;
           if (status === 'Absent') absentTotal++;
 
@@ -719,7 +936,7 @@
 
         studentsList.forEach(student => {
           datesInSelectedMonth.forEach(date => {
-            const status = activeClass.attendance[date]?.[student.id];
+            const status = attendanceRecord[date]?.[student.id];
             if (status === 'Present') presentCount++;
             if (status === 'Absent') absentCount++;
           });
@@ -727,10 +944,7 @@
 
         const possibleDays = studentsList.length * totalSchoolDays;
         
-        // Average Daily Attendance (Total Present / School Days)
         const ada = totalSchoolDays > 0 ? (presentCount / totalSchoolDays) : 0;
-        
-        // Percentage of Daily Attendance ((Total Present / Possible Days) * 100)
         const pda = possibleDays > 0 ? (presentCount / possibleDays) * 100 : 0;
 
         return {
